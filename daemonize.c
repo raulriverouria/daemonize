@@ -37,6 +37,7 @@ static const char  *out_file   = NULL;
 static const char  *err_file   = NULL;
 static const char  *lock_file  = NULL;
 static bool         be_verbose = FALSE;
+static bool         for_ever   = FALSE;
 static const char  *user       = NULL;
 static char       **cmd        = NULL;
 static const char  *cwd        = "/";
@@ -110,7 +111,8 @@ static void usage(char *prog)
 "-p <pidfile>   Save PID to <pidfile>.",
 "-u <user>      Run daemon as user <user>. Requires invocation as root.",
 "-l <lockfile>  Single-instance checking using lockfile <lockfile>.",
-"-v             Issue verbose messages to stdout while daemonizing."
+"-v             Issue verbose messages to stdout while daemonizing.",
+"-f             run forever. If dies, rerun 10\" later"
     };
 
     int i;
@@ -192,7 +194,7 @@ static void parse_params(int argc, char **argv)
       Using x_getopt() ensures that daemonize uses its own version, which
       always behaves consistently.
     */
-    while ( (opt = x_getopt(argc, argv, "ac:u:p:vo:e:E:l:")) != -1)
+    while ( (opt = x_getopt(argc, argv, "fac:u:p:vo:e:E:l:")) != -1)
     {
         switch (opt)
         {
@@ -210,6 +212,10 @@ static void parse_params(int argc, char **argv)
 
             case 'v':
                 be_verbose = TRUE;
+                break;
+
+            case 'f':
+                for_ever = TRUE;
                 break;
 
             case 'u':
@@ -422,6 +428,7 @@ int main(int argc, char **argv)
     int    noclose = 0;
     int    lockFD;
     struct stat st;
+    pid_t  c_pid;
 
     if (geteuid() != uid)
         die("This executable is too dangerous to be setuid.\n");
@@ -485,8 +492,12 @@ int main(int argc, char **argv)
             cwd, strerror (errno));
     }
 
-    verbose("Daemonizing...");
-
+    if (for_ever) {
+        verbose("Daemonizing for ever, even if %d dies...", cmd[0]);
+    } else {
+        verbose("Daemonizing...");
+    }
+     
     if (redirect_stdout_stderr())
         noclose = 1;
 
@@ -522,11 +533,31 @@ int main(int argc, char **argv)
         setenv("IFS"," \t\n",1);
 
     if (getenv("PATH") == NULL)
-        setenv("PATH","/usr/local/sbin:/sbin:/bin:/usr/sbin:/usr/bin", 1);
+        setenv("PATH","/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin", 1);
 
-    execvp(cmd[0], cmd);
+    if (!for_ever) {
+        /* Easy, only daemonize */
+        execvp(cmd[0], cmd);
+        die("Can't exec \"%s\": %s\n", cmd[0], strerror (errno));
+    } else {
+        /* Run for_ever, daemonized but again if die */
+        while ( 1 ) {
+            c_pid = fork();
+            if (c_pid == 0) {
+                /* Child, execute the command */
+                execvp(cmd[0], cmd);
+            }else if (c_pid > 0){
+                /* Parent, only wait for your child */
+                wait(NULL);
+            }else{
+                /* Some error, no fork :( */
+                die("Can't fork. Exiting...");
+            }
+            sleep(10);
+        }
+    }
 
-    die("Can't exec \"%s\": %s\n", cmd[0], strerror (errno));
+    
 }
 
 /*  vim: set et sw=4 sts=4 : */
